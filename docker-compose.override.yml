@@ -1,0 +1,27 @@
+# docker-compose.override.yml (для разработки)
+version: '3.8'
+
+services:
+  service_users:
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+    volumes:
+      - ./service_users:/app
+      - /app/node_modules
+
+  service_orders:
+    environment:
+      - NODE_ENV=development  
+      - LOG_LEVEL=debug
+    volumes:
+      - ./service_orders:/app
+      - /app/node_modules
+
+  api_gateway:
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+    volumes:
+      - ./api_gateway:/app
+      - /app/node_modules

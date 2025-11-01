@@ -3,11 +3,12 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
-const pino = require('pino');
+const { createLogger } = require('./middleware/logger');
+const tracingMiddleware = require('./middleware/tracing');
 const expressPino = require('express-pino-logger');
 const { z } = require('zod');
 
-const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+const logger = createLogger('users-service');
 const expressLogger = expressPino({ logger });
 
 const app = express();
@@ -41,15 +42,7 @@ const updateProfileSchema = z.object({
 // Middleware
 app.use(express.json());
 app.use(expressLogger);
-
-// Add X-Request-ID to logs
-app.use((req, res, next) => {
-  req.log = logger.child({ 
-    requestId: req.headers['x-request-id'],
-    userId: req.headers['x-user-id']
-  });
-  next();
-});
+app.use(tracingMiddleware); // Добавляем трассировку ПЕРЕД роутами
 
 // Utility functions
 const formatResponse = (success, data = null, error = null) => ({
@@ -71,6 +64,7 @@ app.post('/v1/auth/register', async (req, res) => {
     );
     
     if (existingUser.rows.length > 0) {
+      req.log.warn(`Registration failed: user already exists - ${validatedData.email}`);
       return res.status(409).json(
         formatResponse(false, null, {
           code: 'USER_EXISTS',
@@ -93,7 +87,7 @@ app.post('/v1/auth/register', async (req, res) => {
 
     const user = result.rows[0];
     
-    req.log.info(`User registered: ${user.email}`);
+    req.log.info({ userId: user.id, email: user.email }, 'User registered successfully');
     
     res.status(201).json(
       formatResponse(true, {
@@ -107,6 +101,7 @@ app.post('/v1/auth/register', async (req, res) => {
     );
   } catch (error) {
     if (error instanceof z.ZodError) {
+      req.log.warn('Registration validation failed', { errors: error.errors });
       return res.status(400).json(
         formatResponse(false, null, {
           code: 'VALIDATION_ERROR',
@@ -115,7 +110,7 @@ app.post('/v1/auth/register', async (req, res) => {
       );
     }
     
-    req.log.error(error);
+    req.log.error('Registration failed:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -137,6 +132,7 @@ app.post('/v1/auth/login', async (req, res) => {
     );
     
     if (result.rows.length === 0) {
+      req.log.warn(`Login failed: user not found - ${validatedData.email}`);
       return res.status(401).json(
         formatResponse(false, null, {
           code: 'INVALID_CREDENTIALS',
@@ -151,6 +147,7 @@ app.post('/v1/auth/login', async (req, res) => {
     const isValidPassword = await bcrypt.compare(validatedData.password, user.password_hash);
     
     if (!isValidPassword) {
+      req.log.warn(`Login failed: invalid password for user - ${validatedData.email}`);
       return res.status(401).json(
         formatResponse(false, null, {
           code: 'INVALID_CREDENTIALS',
@@ -170,7 +167,7 @@ app.post('/v1/auth/login', async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
     );
 
-    req.log.info(`User logged in: ${user.email}`);
+    req.log.info({ userId: user.id }, 'User logged in successfully');
     
     res.json(
       formatResponse(true, {
@@ -185,6 +182,7 @@ app.post('/v1/auth/login', async (req, res) => {
     );
   } catch (error) {
     if (error instanceof z.ZodError) {
+      req.log.warn('Login validation failed', { errors: error.errors });
       return res.status(400).json(
         formatResponse(false, null, {
           code: 'VALIDATION_ERROR',
@@ -193,7 +191,7 @@ app.post('/v1/auth/login', async (req, res) => {
       );
     }
     
-    req.log.error(error);
+    req.log.error('Login failed:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -214,6 +212,7 @@ app.get('/v1/profile', async (req, res) => {
     );
     
     if (result.rows.length === 0) {
+      req.log.warn(`Profile not found for user ID: ${userId}`);
       return res.status(404).json(
         formatResponse(false, null, {
           code: 'USER_NOT_FOUND',
@@ -224,11 +223,13 @@ app.get('/v1/profile', async (req, res) => {
     
     const user = result.rows[0];
     
+    req.log.debug({ userId }, 'Profile retrieved successfully');
+    
     res.json(
       formatResponse(true, { user })
     );
   } catch (error) {
-    req.log.error(error);
+    req.log.error('Failed to get profile:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -250,6 +251,7 @@ app.put('/v1/profile', async (req, res) => {
     );
     
     if (result.rows.length === 0) {
+      req.log.warn(`Profile update failed: user not found - ${userId}`);
       return res.status(404).json(
         formatResponse(false, null, {
           code: 'USER_NOT_FOUND',
@@ -260,13 +262,14 @@ app.put('/v1/profile', async (req, res) => {
     
     const user = result.rows[0];
     
-    req.log.info(`Profile updated for user: ${user.email}`);
+    req.log.info({ userId }, 'Profile updated successfully');
     
     res.json(
       formatResponse(true, { user })
     );
   } catch (error) {
     if (error instanceof z.ZodError) {
+      req.log.warn('Profile update validation failed', { errors: error.errors });
       return res.status(400).json(
         formatResponse(false, null, {
           code: 'VALIDATION_ERROR',
@@ -275,7 +278,7 @@ app.put('/v1/profile', async (req, res) => {
       );
     }
     
-    req.log.error(error);
+    req.log.error('Failed to update profile:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -293,6 +296,7 @@ app.get('/v1/users', async (req, res) => {
     
     // Check if user is admin
     if (!userRoles.includes('admin')) {
+      req.log.warn(`Unauthorized admin access attempt by user: ${userId}`);
       return res.status(403).json(
         formatResponse(false, null, {
           code: 'FORBIDDEN',
@@ -318,6 +322,8 @@ app.get('/v1/users', async (req, res) => {
     const countResult = await pool.query('SELECT COUNT(*) FROM users');
     const total = parseInt(countResult.rows[0].count);
     
+    req.log.info({ adminId: userId, page, limit }, 'Admin accessed users list');
+    
     res.json(
       formatResponse(true, {
         users: usersResult.rows,
@@ -330,7 +336,7 @@ app.get('/v1/users', async (req, res) => {
       })
     );
   } catch (error) {
-    req.log.error(error);
+    req.log.error('Failed to get users list:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -340,18 +346,44 @@ app.get('/v1/users', async (req, res) => {
   }
 });
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({
-    success: true,
-    data: {
-      service: 'users-service',
-      status: 'healthy',
-      timestamp: new Date().toISOString()
-    }
-  });
+// Health check с детальной информацией
+app.get('/health', async (req, res) => {
+  try {
+    // Проверяем соединение с БД
+    await pool.query('SELECT 1');
+    
+    const healthInfo = {
+      success: true,
+      data: {
+        service: 'users-service',
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        database: 'connected',
+        environment: process.env.NODE_ENV || 'development',
+        version: '1.0.0'
+      }
+    };
+    
+    req.log.debug('Health check passed', healthInfo.data);
+    res.json(healthInfo);
+  } catch (error) {
+    req.log.error('Health check failed:', error);
+    res.status(503).json({
+      success: false,
+      data: {
+        service: 'users-service',
+        status: 'unhealthy',
+        database: 'disconnected',
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
 });
 
 app.listen(PORT, () => {
-  logger.info(`Users Service running on port ${PORT}`);
+  logger.info({
+    event: 'service_start',
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development'
+  }, `Users Service running on port ${PORT}`);
 });
