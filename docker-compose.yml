@@ -1,0 +1,104 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # База данных PostgreSQL
+  postgres:
+    image: postgres:15
+    container_name: task_postgres
+    environment:
+      POSTGRES_DB: taskdb
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - task_network
+
+  # Веб-интерфейс для управления БД
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: task_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@systemcontrol.ru
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+    networks:
+      - task_network
+
+  # Сервис пользователей
+  service_users:
+    build: ./service_users
+    container_name: task_users
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: taskdb
+      DB_USER: admin
+      DB_PASSWORD: password
+      JWT_SECRET: your-super-secret-jwt-key-2024
+      JWT_EXPIRES_IN: 24h
+      SERVICE_PORT: 3001
+    ports:
+      - "3001:3001"
+    depends_on:
+      - postgres
+    networks:
+      - task_network
+    restart: unless-stopped
+
+  # Сервис заказов
+  service_orders:
+    build: ./service_orders
+    container_name: task_orders
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: taskdb
+      DB_USER: admin
+      DB_PASSWORD: password
+      JWT_SECRET: your-super-secret-jwt-key-2024
+      USERS_SERVICE_URL: http://service_users:3001
+      SERVICE_PORT: 3002
+    ports:
+      - "3002:3002"
+    depends_on:
+      - postgres
+      - service_users
+    networks:
+      - task_network
+    restart: unless-stopped
+
+  # API Gateway
+  api_gateway:
+    build: ./api_gateway
+    container_name: task_gateway
+    environment:
+      NODE_ENV: production
+      GATEWAY_PORT: 3000
+      USERS_SERVICE_URL: http://service_users:3001
+      ORDERS_SERVICE_URL: http://service_orders:3002
+      JWT_SECRET: your-super-secret-jwt-key-2024
+    ports:
+      - "3000:3000"
+    depends_on:
+      - service_users
+      - service_orders
+    networks:
+      - task_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  task_network:
+    driver: bridge
