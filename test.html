@@ -1,0 +1,126 @@
+<!-- test.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Тестирование API</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        .endpoint { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        button { margin: 5px; padding: 8px 15px; }
+        pre { background: #f5f5f5; padding: 10px; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Тестирование микросервисов</h1>
+    
+    <div class="endpoint">
+        <h3>1. Регистрация</h3>
+        <input type="text" id="regEmail" placeholder="Email" value="test@example.com">
+        <input type="password" id="regPassword" placeholder="Пароль" value="password123">
+        <input type="text" id="regName" placeholder="Имя" value="Test User">
+        <button onclick="register()">Зарегистрироваться</button>
+    </div>
+
+    <div class="endpoint">
+        <h3>2. Вход</h3>
+        <input type="text" id="loginEmail" placeholder="Email" value="test@example.com">
+        <input type="password" id="loginPassword" placeholder="Пароль" value="password123">
+        <button onclick="login()">Войти</button>
+    </div>
+
+    <div class="endpoint">
+        <h3>3. Профиль (требует токен)</h3>
+        <button onclick="getProfile()">Получить профиль</button>
+    </div>
+
+    <div class="endpoint">
+        <h3>4. Создать заказ</h3>
+        <button onclick="createOrder()">Создать заказ</button>
+    </div>
+
+    <div class="endpoint">
+        <h3>5. Список заказов</h3>
+        <button onclick="getOrders()">Получить заказы</button>
+    </div>
+
+    <h3>Результат:</h3>
+    <pre id="result"></pre>
+
+    <script>
+        let token = '';
+        const API_URL = 'http://localhost:3000';
+
+        function showResult(data) {
+            document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+        }
+
+        async function register() {
+            const email = document.getElementById('regEmail').value;
+            const password = document.getElementById('regPassword').value;
+            const name = document.getElementById('regName').value;
+            
+            const response = await fetch(`${API_URL}/v1/auth/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password, name })
+            });
+            showResult(await response.json());
+        }
+
+        async function login() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            const response = await fetch(`${API_URL}/v1/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+            const data = await response.json();
+            if (data.success) {
+                token = data.data.token;
+                alert('Токен получен!');
+            }
+            showResult(data);
+        }
+
+        async function getProfile() {
+            if (!token) return alert('Сначала войдите в систему!');
+            
+            const response = await fetch(`${API_URL}/v1/profile`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            showResult(await response.json());
+        }
+
+        async function createOrder() {
+            if (!token) return alert('Сначала войдите в систему!');
+            
+            const response = await fetch(`${API_URL}/v1/orders`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    items: [
+                        { product: "Кирпич", quantity: 100, price: 50 },
+                        { product: "Цемент", quantity: 10, price: 300 }
+                    ],
+                    total: 8000
+                })
+            });
+            showResult(await response.json());
+        }
+
+        async function getOrders() {
+            if (!token) return alert('Сначала войдите в систему!');
+            
+            const response = await fetch(`${API_URL}/v1/orders`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            showResult(await response.json());
+        }
+    </script>
+</body>
+</html>
