@@ -1,5 +1,4 @@
-version: '3.8'
-
+# docker-compose.override.yml (УДАЛИ СТРОКУ version)
 services:
   postgres:
     environment:
