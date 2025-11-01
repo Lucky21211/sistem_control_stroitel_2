@@ -46,4 +46,4 @@ CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders
 
 -- Создание тестового администратора (пароль: admin123)
 INSERT INTO users (email, password_hash, name, roles) VALUES
-('admin@systemcontrol.ru', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Администратор', '{"user","admin"}');
+('admin@systemcontrol.ru', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Администратор', '{"user","admin"}'); 
