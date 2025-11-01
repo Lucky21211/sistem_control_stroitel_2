@@ -1,27 +1,54 @@
-# docker-compose.override.yml (для разработки)
 version: '3.8'
 
 services:
+  postgres:
+    environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    ports:
+      - "5432:5432"
+
+  pgadmin:
+    ports:
+      - "8080:80"
+    environment:
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+
   service_users:
     environment:
       - NODE_ENV=development
       - LOG_LEVEL=debug
+      - SERVICE_PORT=3001
+    ports:
+      - "3001:3001"
     volumes:
       - ./service_users:/app
       - /app/node_modules
+    command: npm run dev
 
   service_orders:
     environment:
-      - NODE_ENV=development  
-      - LOG_LEVEL=debug
+      - NODE_ENV=development
+      - LOG_LEVEL=debug  
+      - SERVICE_PORT=3002
+    ports:
+      - "3002:3002"
     volumes:
       - ./service_orders:/app
       - /app/node_modules
+    command: npm run dev
 
   api_gateway:
     environment:
       - NODE_ENV=development
       - LOG_LEVEL=debug
+      - GATEWAY_PORT=3000
+      - USERS_SERVICE_URL=http://service_users:3001
+      - ORDERS_SERVICE_URL=http://service_orders:3002
+      - JWT_SECRET=your-super-secret-jwt-key-2024-development
+    ports:
+      - "3000:3000"
     volumes:
       - ./api_gateway:/app
       - /app/node_modules
+    command: npm run dev
