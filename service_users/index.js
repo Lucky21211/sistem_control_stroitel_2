@@ -7,6 +7,8 @@ const tracingMiddleware = require('./middleware/tracing');
 const expressPino = require('express-pino-logger');
 const { z } = require('zod');
 
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-2024';
+
 const logger = createLogger('users-service');
 const expressLogger = expressPino({ logger });
 
@@ -39,27 +41,7 @@ const updateProfileSchema = z.object({
 });
 
 // CORS middleware
-app.use((req, res, next) => {
-  const allowedOrigins = ['http://127.0.0.1:5500', 'http://localhost:3000', 'http://localhost:5500', 'http://localhost:3001'];
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  } else {
-    res.header('Access-Control-Allow-Origin', '*');
-  }
-  
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID, X-User-Id, X-User-Roles');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  next();
-});
+
 
 // Middleware
 app.use(express.json());
@@ -71,6 +53,27 @@ const formatResponse = (success, data = null, error = null) => ({
   success,
   data,
   error
+});
+
+app.get('/v1/debug/headers', async (req, res) => {
+  const headersInfo = {
+    'x-user-id': req.headers['x-user-id'] || 'NOT SET',
+    'x-user-roles': req.headers['x-user-roles'] || 'NOT SET', 
+    'x-user-email': req.headers['x-user-email'] || 'NOT SET',
+    'authorization': req.headers['authorization'] ? 'PRESENT' : 'MISSING',
+    'x-request-id': req.headers['x-request-id'] || 'NOT SET'
+  };
+  
+  console.log('📨 Headers received in users-service:', headersInfo);
+  
+  res.json({
+    success: true,
+    data: {
+      headers: headersInfo,
+      service: 'users-service',
+      timestamp: new Date().toISOString()
+    }
+  });
 });
 
 // Routes
@@ -147,7 +150,6 @@ app.post('/v1/auth/login', async (req, res) => {
   try {
     const validatedData = loginSchema.parse(req.body);
     
-    
     const result = await pool.query(
       'SELECT id, email, password_hash, name, roles FROM users WHERE email = $1',
       [validatedData.email]
@@ -185,7 +187,7 @@ app.post('/v1/auth/login', async (req, res) => {
         email: user.email,
         roles: user.roles
       },
-      process.env.JWT_SECRET,
+      JWT_SECRET, // ✅ ИСПОЛЬЗУЙ КОНСТАНТУ ВМЕСТО process.env.JWT_SECRET
       { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
     );
 

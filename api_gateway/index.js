@@ -1,4 +1,4 @@
-// api_gateway/index.js - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// api_gateway/index.js 
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
@@ -6,6 +6,8 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const pino = require('pino');
 const expressPino = require('express-pino-logger');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-2024';
 
 const logger = pino({ 
   level: process.env.LOG_LEVEL || 'info',
@@ -93,31 +95,44 @@ const createServiceProxy = (serviceName, target) => {
   return createProxyMiddleware({
     target,
     changeOrigin: true,
-    // 🔥 ВАЖНО: Добавляем эти опции
+    // ✅ УБИРАЕМ pathRewrite - он ломает запросы!
     onProxyReq: (proxyReq, req, res) => {
-      // Прокидываем пользовательские заголовки вглубь (по ТЗ)
+      // 🔥 КРИТИЧЕСКИ ВАЖНО: Прокидываем пользовательские заголовки
       if (req.user) {
-        proxyReq.setHeader('X-User-Id', req.user.userId);
-        proxyReq.setHeader('X-User-Roles', JSON.stringify(req.user.roles));
-        proxyReq.setHeader('X-User-Email', req.user.email);
+        const userId = req.user.userId || req.user.id;
+        const userRoles = req.user.roles || ['user'];
+        const userEmail = req.user.email || '';
+        
+        proxyReq.setHeader('X-User-Id', userId);
+        proxyReq.setHeader('X-User-Roles', JSON.stringify(userRoles));
+        proxyReq.setHeader('X-User-Email', userEmail);
+        
+        // Логируем для отладки
+        console.log('🔧 Setting headers for', serviceName, {
+          userId,
+          roles: userRoles,
+          email: userEmail
+        });
+      } else {
+        console.log('⚠️ No user object for', serviceName);
       }
       
-      // 🔥 КРИТИЧЕСКИ ВАЖНО: Передаем тело запроса
-      if (req.body) {
+      // Передаем тело запроса (только для POST/PUT/PATCH)
+      if (req.body && Object.keys(req.body).length > 0 && 
+          (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
         const bodyData = JSON.stringify(req.body);
         proxyReq.setHeader('Content-Type', 'application/json');
         proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
         proxyReq.write(bodyData);
       }
       
-      // Логируем проксирование
-      req.log.info(`Proxying to ${serviceName}: ${req.method} ${req.path}`);
+      console.log(`🔄 Proxying to ${serviceName}: ${req.method} ${req.originalUrl}`);
     },
     onProxyRes: (proxyRes, req, res) => {
-      req.log.info(`Response from ${serviceName}: ${proxyRes.statusCode}`);
+      console.log(`✅ Response from ${serviceName}: ${proxyRes.statusCode}`);
     },
     onError: (err, req, res) => {
-      req.log.error(`Proxy error to ${serviceName}:`, err);
+      console.error(`❌ Proxy error to ${serviceName}:`, err);
       res.status(503).json({
         success: false,
         error: {
@@ -148,7 +163,12 @@ const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
+  console.log('🔐 AuthenticateToken called for:', req.method, req.url);
+  console.log('📨 Authorization header:', authHeader ? 'PRESENT' : 'MISSING');
+  console.log('🔑 Token:', token ? `${token.substring(0, 20)}...` : 'MISSING');
+
   if (!token) {
+    console.log('❌ No token provided');
     return res.status(401).json({
       success: false,
       error: {
@@ -158,8 +178,9 @@ const authenticateToken = (req, res, next) => {
     });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+  jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
+      console.log('❌ JWT verification failed:', err.message);
       return res.status(403).json({
         success: false,
         error: {
@@ -168,6 +189,8 @@ const authenticateToken = (req, res, next) => {
         }
       });
     }
+    
+    console.log('✅ JWT verification successful. User:', user);
     req.user = user;
     next();
   });
@@ -176,6 +199,7 @@ const authenticateToken = (req, res, next) => {
 // 🔥 ВАЖНО: Apply authentication ТОЛЬКО для защищенных путей
 app.use('/v1/users', authenticateToken, usersServiceProxy);
 app.use('/v1/orders', authenticateToken, ordersServiceProxy);
+app.use('/v1/profile', authenticateToken, usersServiceProxy);
 
 // Health check
 app.get('/health', async (req, res) => {

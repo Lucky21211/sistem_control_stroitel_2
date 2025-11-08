@@ -44,7 +44,7 @@ services:
       - GATEWAY_PORT=3000
       - USERS_SERVICE_URL=http://service_users:3001
       - ORDERS_SERVICE_URL=http://service_orders:3002
-      - JWT_SECRET=your-super-secret-jwt-key-2024-development
+      - JWT_SECRET=your-super-secret-jwt-key-2024
     ports:
       - "3000:3000"
     volumes:

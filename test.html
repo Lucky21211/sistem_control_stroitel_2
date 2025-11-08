@@ -133,30 +133,43 @@
 
     // 2. Вход в систему
     async function login() {
-        const statusElement = document.getElementById('loginStatus');
-        statusElement.textContent = '⏳ Выполняется...';
+    const statusElement = document.getElementById('loginStatus');
+    statusElement.textContent = '⏳ Выполняется...';
+    
+    try {
+        const email = document.getElementById('loginEmail').value;
+        const password = document.getElementById('loginPassword').value;
         
-        try {
-            const email = document.getElementById('loginEmail').value;
-            const password = document.getElementById('loginPassword').value;
+        const response = await fetch(`${GATEWAY_URL}/v1/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        });
+        
+        const data = await response.json();
+        if (data.success && data.data.token) {
+            token = data.data.token;
+            updateTokenDisplay();
             
-            const response = await fetch(`${GATEWAY_URL}/v1/auth/login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
-            });
+            console.log('🔐 ПОЛУЧЕН ТОКЕН:', token);
             
-            const data = await response.json();
-            if (data.success && data.data.token) {
-                token = data.data.token;
-                updateTokenDisplay();
+            // Декодируем payload токена
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                console.log('📋 PAYLOAD ТОКЕНА:', payload);
+                console.log('⏰ Токен истекает:', new Date(payload.exp * 1000));
+                console.log('👤 UserId в токене:', payload.userId);
+                console.log('🎭 Роли в токене:', payload.roles);
+            } catch (e) {
+                console.error('❌ Ошибка декодирования токена:', e);
             }
-            showResult(data, statusElement);
-            
-        } catch (error) {
-            handleError(error, 'Вход в систему', statusElement);
         }
+        showResult(data, statusElement);
+        
+    } catch (error) {
+        handleError(error, 'Вход в систему', statusElement);
     }
+}
 
     // 3. Получение профиля
     async function getProfile() {
@@ -168,6 +181,9 @@
             statusElement.className = 'status error';
             return;
         }
+
+        console.log('🔑 Отправляемый токен:', token);
+        console.log('📨 Authorization header:', `Bearer ${token}`);
         
         statusElement.textContent = '⏳ Выполняется...';
         
