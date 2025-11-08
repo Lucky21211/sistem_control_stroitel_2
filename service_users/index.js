@@ -1,4 +1,3 @@
-// service_users/index.js
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -39,10 +38,33 @@ const updateProfileSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').optional()
 });
 
+// CORS middleware
+app.use((req, res, next) => {
+  const allowedOrigins = ['http://127.0.0.1:5500', 'http://localhost:3000', 'http://localhost:5500', 'http://localhost:3001'];
+  const origin = req.headers.origin;
+  
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  } else {
+    res.header('Access-Control-Allow-Origin', '*');
+  }
+  
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID, X-User-Id, X-User-Roles');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
+
 // Middleware
 app.use(express.json());
 app.use(expressLogger);
-app.use(tracingMiddleware); // Добавляем трассировку ПЕРЕД роутами
+app.use(tracingMiddleware);
 
 // Utility functions
 const formatResponse = (success, data = null, error = null) => ({
@@ -57,7 +79,7 @@ app.post('/v1/auth/register', async (req, res) => {
   try {
     const validatedData = registerSchema.parse(req.body);
     
-    // Check if user already exists
+    // Проверьте, существует ли пользователь уже сейчас
     const existingUser = await pool.query(
       'SELECT id FROM users WHERE email = $1',
       [validatedData.email]
@@ -73,11 +95,11 @@ app.post('/v1/auth/register', async (req, res) => {
       );
     }
 
-    // Hash password
+    // Хэш-пароль
     const saltRounds = 10;
     const passwordHash = await bcrypt.hash(validatedData.password, saltRounds);
 
-    // Create user
+    // Создать пользователя
     const result = await pool.query(
       `INSERT INTO users (email, password_hash, name) 
        VALUES ($1, $2, $3) 
@@ -125,7 +147,7 @@ app.post('/v1/auth/login', async (req, res) => {
   try {
     const validatedData = loginSchema.parse(req.body);
     
-    // Find user
+    
     const result = await pool.query(
       'SELECT id, email, password_hash, name, roles FROM users WHERE email = $1',
       [validatedData.email]
@@ -143,7 +165,7 @@ app.post('/v1/auth/login', async (req, res) => {
     
     const user = result.rows[0];
     
-    // Check password
+    // Проверьте пароль
     const isValidPassword = await bcrypt.compare(validatedData.password, user.password_hash);
     
     if (!isValidPassword) {
@@ -201,10 +223,20 @@ app.post('/v1/auth/login', async (req, res) => {
   }
 });
 
-// Get current profile
+// Получить текущий профиль
 app.get('/v1/profile', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
+    
+    if (!userId) {
+      req.log.warn('Profile access without user ID');
+      return res.status(401).json(
+        formatResponse(false, null, {
+          code: 'UNAUTHORIZED',
+          message: 'User authentication required'
+        })
+      );
+    }
     
     const result = await pool.query(
       'SELECT id, email, name, roles, created_at, updated_at FROM users WHERE id = $1',
@@ -239,10 +271,21 @@ app.get('/v1/profile', async (req, res) => {
   }
 });
 
-// Update profile
+
 app.put('/v1/profile', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
+    
+    if (!userId) {
+      req.log.warn('Profile update without user ID');
+      return res.status(401).json(
+        formatResponse(false, null, {
+          code: 'UNAUTHORIZED',
+          message: 'User authentication required'
+        })
+      );
+    }
+    
     const validatedData = updateProfileSchema.parse(req.body);
     
     const result = await pool.query(
@@ -288,13 +331,22 @@ app.put('/v1/profile', async (req, res) => {
   }
 });
 
-// Get users list (admin only)
+// Получить список пользователей (только для администраторов)
 app.get('/v1/users', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
     const userRoles = JSON.parse(req.headers['x-user-roles'] || '[]');
     
-    // Check if user is admin
+    if (!userId) {
+      return res.status(401).json(
+        formatResponse(false, null, {
+          code: 'UNAUTHORIZED',
+          message: 'User authentication required'
+        })
+      );
+    }
+    
+    // Проверьте, является ли пользователь администратором
     if (!userRoles.includes('admin')) {
       req.log.warn(`Unauthorized admin access attempt by user: ${userId}`);
       return res.status(403).json(
@@ -309,7 +361,7 @@ app.get('/v1/users', async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
     
-    // Get users with pagination
+    // Получить доступ к пользователям с разбивкой по страницам
     const usersResult = await pool.query(
       `SELECT id, email, name, roles, created_at, updated_at 
        FROM users 
@@ -318,7 +370,7 @@ app.get('/v1/users', async (req, res) => {
       [limit, offset]
     );
     
-    // Get total count
+    // Получите общее количество
     const countResult = await pool.query('SELECT COUNT(*) FROM users');
     const total = parseInt(countResult.rows[0].count);
     

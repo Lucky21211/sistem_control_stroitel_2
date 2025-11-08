@@ -1,126 +1,264 @@
-<!-- test.html -->
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Тестирование API</title>
+    <title>Тестирование API Gateway</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body { font-family: Arial; margin: 20px; }
-        .endpoint { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
-        button { margin: 5px; padding: 8px 15px; }
-        pre { background: #f5f5f5; padding: 10px; }
+        body { font-family: Arial; margin: 20px; background: #f5f5f5; }
+        .endpoint { margin: 15px 0; padding: 15px; border: 1px solid #ddd; background: white; border-radius: 8px; }
+        button { margin: 5px; padding: 10px 20px; background: #007acc; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #005a9e; }
+        input { margin: 5px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 200px; }
+        pre { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; overflow-x: auto; }
+        .status { padding: 5px 10px; border-radius: 4px; margin-left: 10px; font-size: 12px; }
+        .success { background: #4CAF50; color: white; }
+        .error { background: #f44336; color: white; }
+        .token-info { background: #ffeb3b; color: #333; padding: 10px; margin: 10px 0; border-radius: 4px; }
     </style>
 </head>
 <body>
-    <h1>🧪 Тестирование микросервисов</h1>
+    <h1>🚀 Тестирование микросервисов через API Gateway</h1>
+    <p><strong>API Gateway:</strong> http://localhost:3000</p>
     
     <div class="endpoint">
-        <h3>1. Регистрация</h3>
-        <input type="text" id="regEmail" placeholder="Email" value="test@example.com">
+        <h3>1. 🔐 Регистрация пользователя</h3>
+        <input type="text" id="regEmail" placeholder="Email" value="user@test.ru">
         <input type="password" id="regPassword" placeholder="Пароль" value="password123">
         <input type="text" id="regName" placeholder="Имя" value="Test User">
         <button onclick="register()">Зарегистрироваться</button>
+        <span class="status" id="regStatus"></span>
     </div>
 
     <div class="endpoint">
-        <h3>2. Вход</h3>
-        <input type="text" id="loginEmail" placeholder="Email" value="test@example.com">
+        <h3>2. 🔑 Вход в систему</h3>
+        <input type="text" id="loginEmail" placeholder="Email" value="user@test.ru">
         <input type="password" id="loginPassword" placeholder="Пароль" value="password123">
         <button onclick="login()">Войти</button>
+        <span class="status" id="loginStatus"></span>
     </div>
 
     <div class="endpoint">
-        <h3>3. Профиль (требует токен)</h3>
+        <h3>3. 👤 Профиль пользователя (требует токен)</h3>
         <button onclick="getProfile()">Получить профиль</button>
+        <span class="status" id="profileStatus"></span>
     </div>
 
     <div class="endpoint">
-        <h3>4. Создать заказ</h3>
-        <button onclick="createOrder()">Создать заказ</button>
+        <h3>4. 📦 Создание заказа</h3>
+        <button onclick="createOrder()">Создать тестовый заказ</button>
+        <span class="status" id="orderStatus"></span>
     </div>
 
     <div class="endpoint">
-        <h3>5. Список заказов</h3>
-        <button onclick="getOrders()">Получить заказы</button>
+        <h3>5. 📋 Список заказов</h3>
+        <button onclick="getOrders()">Получить мои заказы</button>
+        <span class="status" id="ordersStatus"></span>
     </div>
 
-    <h3>Результат:</h3>
-    <pre id="result"></pre>
+    <div id="tokenDisplay" class="token-info" style="display: none;">
+        <strong>Токен активен:</strong> <span id="tokenPreview"></span>
+    </div>
+
+    <h3>📊 Результат запроса:</h3>
+    <pre id="result">Нажмите кнопку для тестирования API...</pre>
 
     <script>
-        let token = '';
-        const API_URL = 'http://localhost:3000';
-
-        function showResult(data) {
-            document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+    let token = '';
+    const GATEWAY_URL = 'http://localhost:3000';  // API Gateway
+    
+    // Обновляем отображение токена
+    function updateTokenDisplay() {
+        const tokenDisplay = document.getElementById('tokenDisplay');
+        const tokenPreview = document.getElementById('tokenPreview');
+        
+        if (token) {
+            tokenDisplay.style.display = 'block';
+            tokenPreview.textContent = token.substring(0, 20) + '...';
+        } else {
+            tokenDisplay.style.display = 'none';
         }
+    }
 
-        async function register() {
+    // Показываем результат
+    function showResult(data, statusElement = null) {
+        const resultElement = document.getElementById('result');
+        resultElement.textContent = JSON.stringify(data, null, 2);
+        
+        if (statusElement) {
+            statusElement.textContent = data.success ? '✅ Успех' : '❌ Ошибка';
+            statusElement.className = 'status ' + (data.success ? 'success' : 'error');
+        }
+    }
+
+    // Обработка ошибок
+    function handleError(error, operation, statusElement = null) {
+        console.error(`❌ ${operation} error:`, error);
+        const errorData = { 
+            success: false, 
+            error: { 
+                code: 'CLIENT_ERROR',
+                message: `${operation} failed: ${error.message}`,
+                details: 'Проверьте консоль браузера (F12) для деталей'
+            } 
+        };
+        showResult(errorData, statusElement);
+    }
+
+    // 1. Регистрация
+    async function register() {
+        const statusElement = document.getElementById('regStatus');
+        statusElement.textContent = '⏳ Выполняется...';
+        
+        try {
             const email = document.getElementById('regEmail').value;
             const password = document.getElementById('regPassword').value;
             const name = document.getElementById('regName').value;
             
-            const response = await fetch(`${API_URL}/v1/auth/register`, {
+            const response = await fetch(`${GATEWAY_URL}/v1/auth/register`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
                 body: JSON.stringify({ email, password, name })
             });
-            showResult(await response.json());
+            
+            const data = await response.json();
+            showResult(data, statusElement);
+            
+        } catch (error) {
+            handleError(error, 'Регистрация', statusElement);
         }
+    }
 
-        async function login() {
+    // 2. Вход в систему
+    async function login() {
+        const statusElement = document.getElementById('loginStatus');
+        statusElement.textContent = '⏳ Выполняется...';
+        
+        try {
             const email = document.getElementById('loginEmail').value;
             const password = document.getElementById('loginPassword').value;
             
-            const response = await fetch(`${API_URL}/v1/auth/login`, {
+            const response = await fetch(`${GATEWAY_URL}/v1/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, password })
             });
+            
             const data = await response.json();
-            if (data.success) {
+            if (data.success && data.data.token) {
                 token = data.data.token;
-                alert('Токен получен!');
+                updateTokenDisplay();
             }
-            showResult(data);
-        }
-
-        async function getProfile() {
-            if (!token) return alert('Сначала войдите в систему!');
+            showResult(data, statusElement);
             
-            const response = await fetch(`${API_URL}/v1/profile`, {
-                headers: { 'Authorization': `Bearer ${token}` }
+        } catch (error) {
+            handleError(error, 'Вход в систему', statusElement);
+        }
+    }
+
+    // 3. Получение профиля
+    async function getProfile() {
+        const statusElement = document.getElementById('profileStatus');
+        
+        if (!token) {
+            alert('⚠️ Сначала войдите в систему!');
+            statusElement.textContent = '❌ Нет токена';
+            statusElement.className = 'status error';
+            return;
+        }
+        
+        statusElement.textContent = '⏳ Выполняется...';
+        
+        try {
+            const response = await fetch(`${GATEWAY_URL}/v1/profile`, {
+                headers: { 
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'application/json'
+                }
             });
-            showResult(await response.json());
-        }
-
-        async function createOrder() {
-            if (!token) return alert('Сначала войдите в систему!');
             
-            const response = await fetch(`${API_URL}/v1/orders`, {
+            const data = await response.json();
+            showResult(data, statusElement);
+            
+        } catch (error) {
+            handleError(error, 'Получение профиля', statusElement);
+        }
+    }
+
+    // 4. Создание заказа
+    async function createOrder() {
+        const statusElement = document.getElementById('orderStatus');
+        
+        if (!token) {
+            alert('⚠️ Сначала войдите в систему!');
+            statusElement.textContent = '❌ Нет токена';
+            statusElement.className = 'status error';
+            return;
+        }
+        
+        statusElement.textContent = '⏳ Выполняется...';
+        
+        try {
+            const response = await fetch(`${GATEWAY_URL}/v1/orders`, {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'application/json'
                 },
                 body: JSON.stringify({
                     items: [
                         { product: "Кирпич", quantity: 100, price: 50 },
-                        { product: "Цемент", quantity: 10, price: 300 }
+                        { product: "Цемент", quantity: 10, price: 300 },
+                        { product: "Песок", quantity: 5, price: 200 }
                     ],
-                    total: 8000
+                    total: 7000
                 })
             });
-            showResult(await response.json());
-        }
-
-        async function getOrders() {
-            if (!token) return alert('Сначала войдите в систему!');
             
-            const response = await fetch(`${API_URL}/v1/orders`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            showResult(await response.json());
+            const data = await response.json();
+            showResult(data, statusElement);
+            
+        } catch (error) {
+            handleError(error, 'Создание заказа', statusElement);
         }
+    }
+
+    // 5. Получение списка заказов
+    async function getOrders() {
+        const statusElement = document.getElementById('ordersStatus');
+        
+        if (!token) {
+            alert('⚠️ Сначала войдите в систему!');
+            statusElement.textContent = '❌ Нет токена';
+            statusElement.className = 'status error';
+            return;
+        }
+        
+        statusElement.textContent = '⏳ Выполняется...';
+        
+        try {
+            const response = await fetch(`${GATEWAY_URL}/v1/orders`, {
+                headers: { 
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'application/json'
+                }
+            });
+            
+            const data = await response.json();
+            showResult(data, statusElement);
+            
+        } catch (error) {
+            handleError(error, 'Получение заказов', statusElement);
+        }
+    }
+
+    // Инициализация
+    document.addEventListener('DOMContentLoaded', function() {
+        updateTokenDisplay();
+    });
     </script>
 </body>
 </html>

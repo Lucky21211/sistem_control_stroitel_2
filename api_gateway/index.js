@@ -1,4 +1,4 @@
-// api_gateway/index.js 
+// api_gateway/index.js - ИСПРАВЛЕННАЯ ВЕРСИЯ
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
@@ -73,16 +73,80 @@ const apiLimiter = rateLimit({
   }
 });
 
-// JWT authentication middleware
+// Add X-Request-ID middleware (трассировка по ТЗ) - ПЕРВЫМ!
+app.use((req, res, next) => {
+  const requestId = req.headers['x-request-id'] || require('crypto').randomUUID();
+  req.headers['x-request-id'] = requestId;
+  res.setHeader('X-Request-ID', requestId);
+  
+  // Добавляем requestId ко всем логам
+  req.log = logger.child({ requestId });
+  next();
+});
+
+// Apply rate limiting ДО аутентификации
+app.use('/v1/auth', authLimiter);
+app.use('/v1', apiLimiter);
+
+// Proxy configuration 
+const createServiceProxy = (serviceName, target) => {
+  return createProxyMiddleware({
+    target,
+    changeOrigin: true,
+    // 🔥 ВАЖНО: Добавляем эти опции
+    onProxyReq: (proxyReq, req, res) => {
+      // Прокидываем пользовательские заголовки вглубь (по ТЗ)
+      if (req.user) {
+        proxyReq.setHeader('X-User-Id', req.user.userId);
+        proxyReq.setHeader('X-User-Roles', JSON.stringify(req.user.roles));
+        proxyReq.setHeader('X-User-Email', req.user.email);
+      }
+      
+      // 🔥 КРИТИЧЕСКИ ВАЖНО: Передаем тело запроса
+      if (req.body) {
+        const bodyData = JSON.stringify(req.body);
+        proxyReq.setHeader('Content-Type', 'application/json');
+        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+        proxyReq.write(bodyData);
+      }
+      
+      // Логируем проксирование
+      req.log.info(`Proxying to ${serviceName}: ${req.method} ${req.path}`);
+    },
+    onProxyRes: (proxyRes, req, res) => {
+      req.log.info(`Response from ${serviceName}: ${proxyRes.statusCode}`);
+    },
+    onError: (err, req, res) => {
+      req.log.error(`Proxy error to ${serviceName}:`, err);
+      res.status(503).json({
+        success: false,
+        error: {
+          code: 'SERVICE_UNAVAILABLE',
+          message: `${serviceName} is temporarily unavailable`
+        }
+      });
+    }
+  });
+};
+
+// Создаем прокси БЕЗ pathRewrite (он ломает запросы)
+const usersServiceProxy = createServiceProxy(
+  'users-service',
+  process.env.USERS_SERVICE_URL || 'http://service_users:3001'
+);
+
+const ordersServiceProxy = createServiceProxy(
+  'orders-service', 
+  process.env.ORDERS_SERVICE_URL || 'http://service_orders:3002'
+);
+
+// 🔥 ВАЖНО: Публичные routes ДО аутентификации
+app.use('/v1/auth', usersServiceProxy);
+
+// JWT authentication middleware - ТОЛЬКО для защищенных путей
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-
-  // Публичные пути (точно по ТЗ)
-  const publicPaths = ['/v1/auth/register', '/v1/auth/login', '/health'];
-  if (publicPaths.some(path => req.path.startsWith(path))) {
-    return next();
-  }
 
   if (!token) {
     return res.status(401).json({
@@ -109,75 +173,11 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Add X-Request-ID middleware (трассировка по ТЗ)
-app.use((req, res, next) => {
-  const requestId = req.headers['x-request-id'] || require('crypto').randomUUID();
-  req.headers['x-request-id'] = requestId;
-  res.setHeader('X-Request-ID', requestId);
-  
-  // Добавляем requestId ко всем логам
-  req.log = logger.child({ requestId });
-  next();
-});
+// 🔥 ВАЖНО: Apply authentication ТОЛЬКО для защищенных путей
+app.use('/v1/users', authenticateToken, usersServiceProxy);
+app.use('/v1/orders', authenticateToken, ordersServiceProxy);
 
-// Proxy configuration with enhanced logging
-const createServiceProxy = (serviceName, target, pathRewrite) => {
-  return createProxyMiddleware({
-    target,
-    changeOrigin: true,
-    pathRewrite,
-    onProxyReq: (proxyReq, req) => {
-      // Прокидываем пользовательские заголовки вглубь (по ТЗ)
-      if (req.user) {
-        proxyReq.setHeader('X-User-Id', req.user.userId);
-        proxyReq.setHeader('X-User-Roles', JSON.stringify(req.user.roles));
-        proxyReq.setHeader('X-User-Email', req.user.email);
-      }
-      
-      // Логируем проксирование
-      req.log.info(`Proxying to ${serviceName}: ${req.method} ${req.path}`);
-    },
-    onProxyRes: (proxyRes, req, res) => {
-      req.log.info(`Response from ${serviceName}: ${proxyRes.statusCode}`);
-    },
-    onError: (err, req, res) => {
-      req.log.error(`Proxy error to ${serviceName}:`, err);
-      res.status(503).json({
-        success: false,
-        error: {
-          code: 'SERVICE_UNAVAILABLE',
-          message: `${serviceName} is temporarily unavailable`
-        }
-      });
-    }
-  });
-};
-
-const usersServiceProxy = createServiceProxy(
-  'users-service',
-  process.env.USERS_SERVICE_URL || 'http://localhost:3001',
-  { '^/v1/users': '/v1' }
-);
-
-const ordersServiceProxy = createServiceProxy(
-  'orders-service', 
-  process.env.ORDERS_SERVICE_URL || 'http://localhost:3002',
-  { '^/v1/orders': '/v1' }
-);
-
-// Apply rate limiting
-app.use('/v1/auth', authLimiter);
-app.use('/v1', apiLimiter);
-
-// Apply authentication (кроме публичных путей)
-app.use(authenticateToken);
-
-// Routes - точное проксирование по ТЗ
-app.use('/v1/auth', usersServiceProxy);
-app.use('/v1/users', usersServiceProxy);
-app.use('/v1/orders', ordersServiceProxy);
-
-// Health check with service status
+// Health check
 app.get('/health', async (req, res) => {
   const health = {
     success: true,

@@ -23,7 +23,7 @@ services:
     volumes:
       - ./service_users:/app
       - /app/node_modules
-    command: npm run dev
+    command: node index.js
 
   service_orders:
     environment:
@@ -35,7 +35,7 @@ services:
     volumes:
       - ./service_orders:/app
       - /app/node_modules
-    command: npm run dev
+    command: node index.js
 
   api_gateway:
     environment:
@@ -50,4 +50,4 @@ services:
     volumes:
       - ./api_gateway:/app
       - /app/node_modules
-    command: npm run dev
+    command: node index.js

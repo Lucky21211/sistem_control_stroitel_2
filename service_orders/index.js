@@ -1,11 +1,11 @@
-// service_orders/index.js
 const express = require('express');
 const { Pool } = require('pg');
-const pino = require('pino');
+const { createLogger } = require('./middleware/logger');
+const tracingMiddleware = require('./middleware/tracing');
 const expressPino = require('express-pino-logger');
 const { z } = require('zod');
 
-const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+const logger = createLogger('orders-service');
 const expressLogger = expressPino({ logger });
 
 const app = express();
@@ -34,18 +34,32 @@ const updateOrderStatusSchema = z.object({
   status: z.enum(['created', 'in_progress', 'completed', 'cancelled'])
 });
 
+// CORS middleware
+app.use((req, res, next) => {
+  const allowedOrigins = ['http://127.0.0.1:5500', 'http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002'];
+  const origin = req.headers.origin;
+  
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  } else {
+    res.header('Access-Control-Allow-Origin', '*');
+  }
+  
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID, X-User-Id, X-User-Roles');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
+
 // Middleware
 app.use(express.json());
 app.use(expressLogger);
-
-// Add X-Request-ID to logs
-app.use((req, res, next) => {
-  req.log = logger.child({ 
-    requestId: req.headers['x-request-id'],
-    userId: req.headers['x-user-id']
-  });
-  next();
-});
+app.use(tracingMiddleware);
 
 // Utility functions
 const formatResponse = (success, data = null, error = null) => ({
@@ -54,13 +68,7 @@ const formatResponse = (success, data = null, error = null) => ({
   error
 });
 
-// Check if user exists (would call users service in real scenario)
-const checkUserExists = async (userId) => {
-  const result = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
-  return result.rows.length > 0;
-};
-
-// Check order ownership
+// Проверьте право собственности на заказ
 const checkOrderOwnership = async (orderId, userId) => {
   const result = await pool.query(
     'SELECT user_id FROM orders WHERE id = $1',
@@ -71,22 +79,52 @@ const checkOrderOwnership = async (orderId, userId) => {
   return result.rows[0].user_id === userId;
 };
 
-// Check if user is admin
+// Проверьте, является ли пользователь администратором
 const isAdmin = (userRoles) => {
   const roles = JSON.parse(userRoles || '[]');
   return roles.includes('admin');
 };
 
+// Domain events (по ТЗ)
+const publishDomainEvent = (req, eventType, payload) => {
+  req.log.info({
+    event: 'DOMAIN_EVENT',
+    type: eventType,
+    payload,
+    service: 'orders-service'
+  }, `Domain event: ${eventType}`);
+  
+
+};
+
 // Routes
+
 // Create order
 app.post('/v1/orders', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
+    const userRoles = req.headers['x-user-roles'];
+    
+    if (!userId) {
+      return res.status(401).json(
+        formatResponse(false, null, {
+          code: 'UNAUTHORIZED',
+          message: 'User authentication required'
+        })
+      );
+    }
+
+    // Полноценная валидация с Zod
     const validatedData = createOrderSchema.parse(req.body);
     
-    // Verify user exists
-    const userExists = await checkUserExists(userId);
-    if (!userExists) {
+    // Проверка существования пользователя (по ТЗ)
+    const userCheck = await pool.query(
+      'SELECT id FROM users WHERE id = $1',
+      [userId]
+    );
+    
+    if (userCheck.rows.length === 0) {
+      req.log.warn(`Order creation failed: user not found - ${userId}`);
       return res.status(404).json(
         formatResponse(false, null, {
           code: 'USER_NOT_FOUND',
@@ -94,8 +132,8 @@ app.post('/v1/orders', async (req, res) => {
         })
       );
     }
-    
-    // Create order
+
+    // Создаем заказ
     const result = await pool.query(
       `INSERT INTO orders (user_id, items, total, status) 
        VALUES ($1, $2, $3, $4) 
@@ -105,16 +143,30 @@ app.post('/v1/orders', async (req, res) => {
 
     const order = result.rows[0];
     
-    req.log.info(`Order created: ${order.id} for user: ${userId}`);
+    req.log.info({ 
+      orderId: order.id, 
+      userId: order.user_id,
+      total: order.total,
+      itemsCount: validatedData.items.length 
+    }, 'Order created successfully');
     
-    // Domain event: order created (stub for future message broker)
-    req.log.info(`DOMAIN_EVENT: ORDER_CREATED - Order: ${order.id}, User: ${userId}`);
+    // Доменное событие: создан заказ (по ТЗ)
+    publishDomainEvent(req, 'ORDER_CREATED', {
+      orderId: order.id,
+      userId: order.user_id,
+      total: order.total,
+      items: validatedData.items,
+      status: 'created',
+      timestamp: new Date().toISOString()
+    });
     
     res.status(201).json(
       formatResponse(true, { order })
     );
+    
   } catch (error) {
     if (error instanceof z.ZodError) {
+      req.log.warn('Order creation validation failed', { errors: error.errors });
       return res.status(400).json(
         formatResponse(false, null, {
           code: 'VALIDATION_ERROR',
@@ -123,7 +175,7 @@ app.post('/v1/orders', async (req, res) => {
       );
     }
     
-    req.log.error(error);
+    req.log.error('Order creation failed:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -133,7 +185,7 @@ app.post('/v1/orders', async (req, res) => {
   }
 });
 
-// Get order by ID
+// Получить заказ по ID
 app.get('/v1/orders/:id', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
@@ -146,6 +198,7 @@ app.get('/v1/orders/:id', async (req, res) => {
     );
     
     if (result.rows.length === 0) {
+      req.log.warn(`Order not found: ${orderId}`);
       return res.status(404).json(
         formatResponse(false, null, {
           code: 'ORDER_NOT_FOUND',
@@ -156,11 +209,12 @@ app.get('/v1/orders/:id', async (req, res) => {
     
     const order = result.rows[0];
     
-    // Check ownership or admin access
+    // Проверьте права собственности или администратора
     const isOwner = order.user_id === userId;
     const hasAdminAccess = isAdmin(userRoles);
     
     if (!isOwner && !hasAdminAccess) {
+      req.log.warn(`Unauthorized access to order: ${orderId} by user: ${userId}`);
       return res.status(403).json(
         formatResponse(false, null, {
           code: 'FORBIDDEN',
@@ -169,11 +223,12 @@ app.get('/v1/orders/:id', async (req, res) => {
       );
     }
     
+    req.log.debug({ orderId }, 'Order retrieved successfully');
     res.json(
       formatResponse(true, { order })
     );
   } catch (error) {
-    req.log.error(error);
+    req.log.error('Failed to get order:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -183,11 +238,20 @@ app.get('/v1/orders/:id', async (req, res) => {
   }
 });
 
-// Get user's orders with pagination
+// Получайте заказы пользователей с разбивкой по страницам
 app.get('/v1/orders', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
     const userRoles = req.headers['x-user-roles'];
+    
+    if (!userId) {
+      return res.status(401).json(
+        formatResponse(false, null, {
+          code: 'UNAUTHORIZED',
+          message: 'User authentication required'
+        })
+      );
+    }
     
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -199,20 +263,28 @@ app.get('/v1/orders', async (req, res) => {
     let countQuery = 'SELECT COUNT(*) FROM orders';
     let queryParams = [];
     
-    // If not admin, only show user's orders
+    // Если вы не являетесь администратором, показывайте только заказы пользователя
     if (!isAdmin(userRoles)) {
       query += ' WHERE user_id = $1';
       countQuery += ' WHERE user_id = $1';
       queryParams = [userId];
     }
     
-    // Add sorting and pagination
+    // Добавьте сортировку и разбивку по страницам
     query += ` ORDER BY ${sortBy} ${sortOrder} LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
     queryParams.push(limit, offset);
     
     const ordersResult = await pool.query(query, queryParams);
     const countResult = await pool.query(countQuery, queryParams.slice(0, 1));
     const total = parseInt(countResult.rows[0].count);
+    
+    req.log.info({ 
+      userId, 
+      page, 
+      limit, 
+      totalOrders: total,
+      isAdmin: isAdmin(userRoles)
+    }, 'Orders list retrieved');
     
     res.json(
       formatResponse(true, {
@@ -226,7 +298,7 @@ app.get('/v1/orders', async (req, res) => {
       })
     );
   } catch (error) {
-    req.log.error(error);
+    req.log.error('Failed to get orders list:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -236,18 +308,29 @@ app.get('/v1/orders', async (req, res) => {
   }
 });
 
-// Update order status
+// Обновить статус заказа
 app.patch('/v1/orders/:id/status', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
     const userRoles = req.headers['x-user-roles'];
     const orderId = req.params.id;
+    
+    if (!userId) {
+      return res.status(401).json(
+        formatResponse(false, null, {
+          code: 'UNAUTHORIZED',
+          message: 'User authentication required'
+        })
+      );
+    }
+    
     const validatedData = updateOrderStatusSchema.parse(req.body);
     
-    // Check order exists and ownership
+    // Проверьте наличие заказа и права собственности
     const orderOwnership = await checkOrderOwnership(orderId, userId);
     
     if (orderOwnership === null) {
+      req.log.warn(`Order not found for status update: ${orderId}`);
       return res.status(404).json(
         formatResponse(false, null, {
           code: 'ORDER_NOT_FOUND',
@@ -256,8 +339,9 @@ app.patch('/v1/orders/:id/status', async (req, res) => {
       );
     }
     
-    // Only owner or admin can update status
+    // Только владелец или администратор может обновлять статус
     if (!orderOwnership && !isAdmin(userRoles)) {
+      req.log.warn(`Unauthorized status update attempt: order ${orderId} by user ${userId}`);
       return res.status(403).json(
         formatResponse(false, null, {
           code: 'FORBIDDEN',
@@ -275,16 +359,29 @@ app.patch('/v1/orders/:id/status', async (req, res) => {
     
     const order = result.rows[0];
     
-    req.log.info(`Order status updated: ${order.id} to ${validatedData.status}`);
+    req.log.info({ 
+      orderId: order.id, 
+      oldStatus: order.status, 
+      newStatus: validatedData.status,
+      updatedBy: userId 
+    }, 'Order status updated');
     
-    // Domain event: order status updated
-    req.log.info(`DOMAIN_EVENT: ORDER_STATUS_UPDATED - Order: ${order.id}, Status: ${validatedData.status}`);
+    // Domain event: 
+    publishDomainEvent(req, 'ORDER_STATUS_UPDATED', {
+      orderId: order.id,
+      userId: order.user_id,
+      oldStatus: order.status,
+      newStatus: validatedData.status,
+      updatedBy: userId,
+      timestamp: new Date().toISOString()
+    });
     
     res.json(
       formatResponse(true, { order })
     );
   } catch (error) {
     if (error instanceof z.ZodError) {
+      req.log.warn('Status update validation failed', { errors: error.errors });
       return res.status(400).json(
         formatResponse(false, null, {
           code: 'VALIDATION_ERROR',
@@ -293,7 +390,7 @@ app.patch('/v1/orders/:id/status', async (req, res) => {
       );
     }
     
-    req.log.error(error);
+    req.log.error('Failed to update order status:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -303,16 +400,26 @@ app.patch('/v1/orders/:id/status', async (req, res) => {
   }
 });
 
-// Cancel order
+
 app.delete('/v1/orders/:id', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'];
     const orderId = req.params.id;
     
-    // Check order exists and ownership
+    if (!userId) {
+      return res.status(401).json(
+        formatResponse(false, null, {
+          code: 'UNAUTHORIZED',
+          message: 'User authentication required'
+        })
+      );
+    }
+    
+    
     const orderOwnership = await checkOrderOwnership(orderId, userId);
     
     if (orderOwnership === null) {
+      req.log.warn(`Order not found for cancellation: ${orderId}`);
       return res.status(404).json(
         formatResponse(false, null, {
           code: 'ORDER_NOT_FOUND',
@@ -322,6 +429,7 @@ app.delete('/v1/orders/:id', async (req, res) => {
     }
     
     if (!orderOwnership) {
+      req.log.warn(`Unauthorized cancellation attempt: order ${orderId} by user ${userId}`);
       return res.status(403).json(
         formatResponse(false, null, {
           code: 'FORBIDDEN',
@@ -339,13 +447,24 @@ app.delete('/v1/orders/:id', async (req, res) => {
     
     const order = result.rows[0];
     
-    req.log.info(`Order cancelled: ${order.id} by user: ${userId}`);
+    req.log.info({ 
+      orderId: order.id, 
+      userId: userId 
+    }, 'Order cancelled');
+    
+    
+    publishDomainEvent(req, 'ORDER_CANCELLED', {
+      orderId: order.id,
+      userId: order.user_id,
+      cancelledBy: userId,
+      timestamp: new Date().toISOString()
+    });
     
     res.json(
       formatResponse(true, { order })
     );
   } catch (error) {
-    req.log.error(error);
+    req.log.error('Failed to cancel order:', error);
     res.status(500).json(
       formatResponse(false, null, {
         code: 'INTERNAL_ERROR',
@@ -355,18 +474,44 @@ app.delete('/v1/orders/:id', async (req, res) => {
   }
 });
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({
-    success: true,
-    data: {
-      service: 'orders-service',
-      status: 'healthy',
-      timestamp: new Date().toISOString()
-    }
-  });
+// Health check с проверкой БД
+app.get('/health', async (req, res) => {
+  try {
+    // Проверяем соединение с БД
+    await pool.query('SELECT 1');
+    
+    const healthInfo = {
+      success: true,
+      data: {
+        service: 'orders-service',
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        database: 'connected',
+        environment: process.env.NODE_ENV || 'development',
+        version: '1.0.0'
+      }
+    };
+    
+    req.log.debug('Health check passed', healthInfo.data);
+    res.json(healthInfo);
+  } catch (error) {
+    req.log.error('Health check failed:', error);
+    res.status(503).json({
+      success: false,
+      data: {
+        service: 'orders-service',
+        status: 'unhealthy',
+        database: 'disconnected',
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
 });
 
 app.listen(PORT, () => {
-  logger.info(`Orders Service running on port ${PORT}`);
+  logger.info({
+    event: 'service_start',
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development'
+  }, `Orders Service running on port ${PORT}`);
 });
