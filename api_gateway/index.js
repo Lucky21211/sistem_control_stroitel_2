@@ -75,7 +75,7 @@ const apiLimiter = rateLimit({
   }
 });
 
-// Add X-Request-ID middleware (трассировка по ТЗ) - ПЕРВЫМ!
+// Add X-Request-ID middleware (трассировка по ТЗ)
 app.use((req, res, next) => {
   const requestId = req.headers['x-request-id'] || require('crypto').randomUUID();
   req.headers['x-request-id'] = requestId;
@@ -95,9 +95,9 @@ const createServiceProxy = (serviceName, target) => {
   return createProxyMiddleware({
     target,
     changeOrigin: true,
-    // ✅ УБИРАЕМ pathRewrite - он ломает запросы!
+    // УБИРАЕМ pathRewrite - он ломает запросы!
     onProxyReq: (proxyReq, req, res) => {
-      // 🔥 КРИТИЧЕСКИ ВАЖНО: Прокидываем пользовательские заголовки
+      // Прокидываем пользовательские заголовки
       if (req.user) {
         const userId = req.user.userId || req.user.id;
         const userRoles = req.user.roles || ['user'];
@@ -108,13 +108,13 @@ const createServiceProxy = (serviceName, target) => {
         proxyReq.setHeader('X-User-Email', userEmail);
         
         // Логируем для отладки
-        console.log('🔧 Setting headers for', serviceName, {
+        console.log('Setting headers for', serviceName, {
           userId,
           roles: userRoles,
           email: userEmail
         });
       } else {
-        console.log('⚠️ No user object for', serviceName);
+        console.log('No user object for', serviceName);
       }
       
       // Передаем тело запроса (только для POST/PUT/PATCH)
@@ -126,13 +126,13 @@ const createServiceProxy = (serviceName, target) => {
         proxyReq.write(bodyData);
       }
       
-      console.log(`🔄 Proxying to ${serviceName}: ${req.method} ${req.originalUrl}`);
+      console.log(`Proxying to ${serviceName}: ${req.method} ${req.originalUrl}`);
     },
     onProxyRes: (proxyRes, req, res) => {
-      console.log(`✅ Response from ${serviceName}: ${proxyRes.statusCode}`);
+      console.log(`Response from ${serviceName}: ${proxyRes.statusCode}`);
     },
     onError: (err, req, res) => {
-      console.error(`❌ Proxy error to ${serviceName}:`, err);
+      console.error(`Proxy error to ${serviceName}:`, err);
       res.status(503).json({
         success: false,
         error: {
@@ -155,7 +155,7 @@ const ordersServiceProxy = createServiceProxy(
   process.env.ORDERS_SERVICE_URL || 'http://service_orders:3002'
 );
 
-// 🔥 ВАЖНО: Публичные routes ДО аутентификации
+// Публичные routes ДО аутентификации
 app.use('/v1/auth', usersServiceProxy);
 
 // JWT authentication middleware - ТОЛЬКО для защищенных путей
@@ -163,12 +163,12 @@ const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
-  console.log('🔐 AuthenticateToken called for:', req.method, req.url);
-  console.log('📨 Authorization header:', authHeader ? 'PRESENT' : 'MISSING');
-  console.log('🔑 Token:', token ? `${token.substring(0, 20)}...` : 'MISSING');
+  console.log('AuthenticateToken called for:', req.method, req.url);
+  console.log('Authorization header:', authHeader ? 'PRESENT' : 'MISSING');
+  console.log('Token:', token ? `${token.substring(0, 20)}...` : 'MISSING');
 
   if (!token) {
-    console.log('❌ No token provided');
+    console.log('No token provided');
     return res.status(401).json({
       success: false,
       error: {
@@ -180,7 +180,7 @@ const authenticateToken = (req, res, next) => {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
-      console.log('❌ JWT verification failed:', err.message);
+      console.log('JWT verification failed:', err.message);
       return res.status(403).json({
         success: false,
         error: {
@@ -190,13 +190,13 @@ const authenticateToken = (req, res, next) => {
       });
     }
     
-    console.log('✅ JWT verification successful. User:', user);
+    console.log('JWT verification successful. User:', user);
     req.user = user;
     next();
   });
 };
 
-// 🔥 ВАЖНО: Apply authentication ТОЛЬКО для защищенных путей
+// Apply authentication ТОЛЬКО для защищенных путей
 app.use('/v1/users', authenticateToken, usersServiceProxy);
 app.use('/v1/orders', authenticateToken, ordersServiceProxy);
 app.use('/v1/profile', authenticateToken, usersServiceProxy);
@@ -242,8 +242,8 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  logger.info(`🚀 API Gateway running on port ${PORT}`);
-  logger.info(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-  logger.info(`🔗 Users Service: ${process.env.USERS_SERVICE_URL}`);
-  logger.info(`📦 Orders Service: ${process.env.ORDERS_SERVICE_URL}`);
+  logger.info(`API Gateway running on port ${PORT}`);
+  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  logger.info(`Users Service: ${process.env.USERS_SERVICE_URL}`);
+  logger.info(`Orders Service: ${process.env.ORDERS_SERVICE_URL}`);
 });
