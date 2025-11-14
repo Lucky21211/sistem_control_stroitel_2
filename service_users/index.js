@@ -64,7 +64,7 @@ app.get('/v1/debug/headers', async (req, res) => {
     'x-request-id': req.headers['x-request-id'] || 'NOT SET'
   };
   
-  console.log('📨 Headers received in users-service:', headersInfo);
+  console.log('Headers received in users-service:', headersInfo);
   
   res.json({
     success: true,
@@ -187,7 +187,7 @@ app.post('/v1/auth/login', async (req, res) => {
         email: user.email,
         roles: user.roles
       },
-      JWT_SECRET, // ✅ ИСПОЛЬЗУЙ КОНСТАНТУ ВМЕСТО process.env.JWT_SECRET
+      JWT_SECRET, 
       { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
     );
 
